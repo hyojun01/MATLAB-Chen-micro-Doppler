@@ -50,9 +50,9 @@ R_init = Rz(phi) * Rx(theta) * Rz(psi);
 %% 5. Point scatterer model
 % Columns are P0, P1, P2 in local coordinates.
 P_local = [...
-    0.0, 0.5, -0.3;
-    0.0, 0.3, 0.0;
-    0.0, 0.4, 0.6];
+    0.0, 0.3, -0.3;
+    0.0, 0.0, 0.0;
+    0.0, 0.6, 0.6];
 
 num_scatterers = size(P_local, 2);
 

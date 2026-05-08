@@ -32,7 +32,7 @@ n0 = R0 / norm(R0);                                 % far-field initial LOS unit
 V_trans = 5 * n0;                                   % translation velocity
 
 % if you want arbitrary translation, replace with for example:
-% V_trans = [0; -5; 0];
+V_trans = [0; -5; 0];
 
 %% 3. Point scatterer in target local coordinates
 r0_local = [1.0; 0.6; 0.8];                         % scatterer position in target local coordinates
@@ -186,7 +186,8 @@ title('STFT of Returned Signal: Translation + Micro-Doppler');
 colorbar;
 hold on;
 plot(t, fD_far, 'w', 'LineWidth', 1.5);
-ylim([-PRF/2, PRF/2]);
+% ylim([-PRF/2, PRF/2]);
+ylim([-400, -50]);
 
 %% Local function
 function S = skew3(a)
