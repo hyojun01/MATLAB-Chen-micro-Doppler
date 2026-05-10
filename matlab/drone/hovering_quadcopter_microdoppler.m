@@ -68,7 +68,7 @@ omega = 2*pi*Omega_rps;     % [rad/s]
 % initial rotor phases
 % chen notes that random initial rotation angles can change the period
 % pattern.
-rng(31);
+rng(47);
 phi0 = 2*pi*rand(1, NR);    % random initial phase per rotor
 
 %% 5. Constant RCS value
@@ -76,7 +76,7 @@ phi0 = 2*pi*rand(1, NR);    % random initial phase per rotor
 % m^2
 sigma_body = 0;          % body point scatterer RCS
 sigma_rotorCenter = 0;   % rotor center / motor-hub point scatterer RCS
-sigma_blade = 1e-3;         % total RCS scale per blade
+sigma_blade = 1e-2;         % total RCS scale per blade
 
 %% 6. Slow-time sampling
 fd_max_approx = 2 * omega * blade_tip * cos(beta) / lambda;
@@ -84,7 +84,7 @@ fd_max_approx = 2 * omega * blade_tip * cos(beta) / lambda;
 fprintf('Approx. max blade-tip micro-Doppler = %.1f Hz\n', fd_max_approx);
 
 fs_slow = 2e6;             % slow-time smapling rate
-Tobs = 0.1;                 % observation time
+Tobs = 0.05;                 % observation time
 t = 0:1/fs_slow:Tobs-1/fs_slow;
 Nt = numel(t);
 
@@ -196,9 +196,10 @@ figure('Name','Micro-Doppler Spectrogram');
 imagesc(Tspec, F, SdB);
 axis xy;
 ylim([-3000 3000]);
-caxis([-60 0]);
+clim([-40 0]);
 grid on;
 colorbar;
+colormap(jet);
 xlabel('Time [s]');
 ylabel('Doppler frequency [Hz]');
 title('Hovering Quadcopter Micro-Doppler Signature');
