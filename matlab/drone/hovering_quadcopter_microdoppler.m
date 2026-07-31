@@ -68,14 +68,15 @@ omega = 2*pi*Omega_rps;     % [rad/s]
 % initial rotor phases
 % chen notes that random initial rotation angles can change the period
 % pattern.
-rng(47);
+rng(20);
 phi0 = 2*pi*rand(1, NR);    % random initial phase per rotor
+% phi0 = 2*pi*zeros(1,NR);
 
 %% 5. Constant RCS value
 % chen mentions drone body RCS around 0.01 m^2 and blade RCS around 0.001
 % m^2
-sigma_body = 0;          % body point scatterer RCS
-sigma_rotorCenter = 0;   % rotor center / motor-hub point scatterer RCS
+sigma_body = 1e-2;          % body point scatterer RCS
+sigma_rotorCenter = 1e-3;   % rotor center / motor-hub point scatterer RCS
 sigma_blade = 1e-2;         % total RCS scale per blade
 
 %% 6. Slow-time sampling
@@ -84,7 +85,7 @@ fd_max_approx = 2 * omega * blade_tip * cos(beta) / lambda;
 fprintf('Approx. max blade-tip micro-Doppler = %.1f Hz\n', fd_max_approx);
 
 fs_slow = 2e6;             % slow-time smapling rate
-Tobs = 0.05;                 % observation time
+Tobs = 0.8;                 % observation time
 t = 0:1/fs_slow:Tobs-1/fs_slow;
 Nt = numel(t);
 

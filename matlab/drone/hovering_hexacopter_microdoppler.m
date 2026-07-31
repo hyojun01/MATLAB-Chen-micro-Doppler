@@ -85,15 +85,16 @@ Omega_rps = 100;                    % rotor rotation rate
 omega = 2*pi*Omega_rps;             % rotor angluar speed
 
 % initial rotor phases
-rng(24);
+rng(15);
 phi0 = 2*pi*rand(1, NR);
+% phi0 = 2*pi*zeros(1, NR);
 
 %% 5. Scattering amplitude parameters
 sigma_body = 1e-2;                  % body point-scatterer amplitude scale
 sigma_rotorHub = 1e-3;              % each rotor hub point-scatterer ampltiude scale
-sigma_blade = 2e-3;                 % each blade line-scatterer amplitude scale
+sigma_blade = 2e-2;                 % each blade line-scatterer amplitude scale
 
-removeStaticMeanForTF = true;       % recommended when body/hub returns are nonzero
+removeStaticMeanForTF = false;       % recommended when body/hub returns are nonzero
 
 %% 6. Slow-time sampling
 u_xy_norm = norm(u_LOS(1:2));
@@ -102,8 +103,8 @@ fd_max_approx = 2 * omega * blade_tip * u_xy_norm / lambda;
 
 fprintf('Approx. max blade-tip micro-Doppler = %.1f Hz\n', fd_max_approx);
 
-fs_slow = 2e6;                      % slow-time sampling rate
-Tobs = 0.1;                         % observation time
+fs_slow = 125e3;                      % slow-time sampling rate
+Tobs = 5;                         % observation time
 
 t = 0:1/fs_slow:Tobs-1/fs_slow;
 Nt = numel(t);
@@ -236,10 +237,10 @@ ylabel('Real\{s_{blades}(t)\}');
 title('Blade-Only Baseband Return');
 
 %% 12. Plot: micro-Doppler spectrogram
-winLen = 4096;
+winLen = 512;
 win = hamming(winLen, 'periodic');
 noverlap = round(0.90 * winLen);
-nfft = 32768;
+nfft = 1024;
 
 [S, F, Tspec] = spectrogram(s_tf, win, noverlap, nfft, fs_slow, 'centered');
 
@@ -248,7 +249,8 @@ SdB = 20*log10(abs(S) ./ (max(abs(S(:))) + eps) + eps);
 figure('Name','Micro-Doppler Spectrogram');
 imagesc(Tspec, F, SdB);
 axis xy;
-ylim(1.5 * [-fd_max_approx fd_max_approx]);
+% ylim(1.5 * [-fd_max_approx fd_max_approx]);
+ylim([-3000 3000]);
 clim([-40 0]);
 grid on;
 colorbar;
