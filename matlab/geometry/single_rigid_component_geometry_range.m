@@ -1,0 +1,779 @@
+%% Single Rigid Component: 3-D Geometry and Monostatic Range Model
+% This script implements the frame hierarchy
+%
+%   A: Radar coordinates
+%   B: Reference coordinates
+%   C: Target local coordinates
+%   D: Single rigid component coordinates
+%
+% using the homogeneous-transform relation
+%
+%   A_p_i(t) = A_T_B(t) * B_T_C(t) * C_T_D(t) * D_p_i.
+%
+% Chen reference-frame constraints used here:
+%   1. The radar is monostatic and located at the origin of A.
+%   2. B is parallel to A and translates with the target reference point.
+%   3. B and C share the same origin.
+%   4. Point scatterers are fixed in the rigid component frame D.
+%
+% Only geometry and exact spherical range are modeled. No reflectivity,
+% propagation phase, baseband signal, or time-frequency processing is used.
+
+clear; close all; clc;
+
+%% 1. Select a built-in single-component scenario
+% Available scenarios:
+%   "breathing"       : rigid chest-patch translation
+%   "two_blade_rotor" : one rigid rotor containing two blades
+scenarioName = "two_blade_rotor";
+
+scenario = createScenario(scenarioName);
+
+% Animation settings. The complete modeled time interval is replayed over
+% animation.playbackDuration seconds without changing the physical geometry.
+animation.enabled = true;
+animation.maximumFrames = 72;
+animation.playbackDuration = 6;
+animation.showTrails = true;
+
+%% 2. Evaluate the common Radar-Reference-Local-Component hierarchy
+time = scenario.time;
+numberOfTimes = numel(time);
+numberOfPoints = size(scenario.pointPosition_D, 2);
+
+pointPosition_A = zeros(3, numberOfPoints, numberOfTimes);
+pointRange = zeros(numberOfPoints, numberOfTimes);
+
+transform_A_B = zeros(4, 4, numberOfTimes);                                 % Reference 좌표계에서 Radar 좌표계로의 변환 행렬
+transform_A_C = zeros(4, 4, numberOfTimes);                                 % Local 좌표계에서 Reference 좌표계로의 변환 행렬
+transform_A_D = zeros(4, 4, numberOfTimes);                                 % Component 좌표계에서 Reference 좌표계로의 변환 행렬
+
+referenceOrigin_A = zeros(3, numberOfTimes);                                % Radar 좌표계에서 바라본 표적 전체의 기준점 위치
+componentOrigin_A = zeros(3, numberOfTimes);                                % Radar 좌표계에서 바라본 표적의 개별 강체 구성요소의 기준점 위치
+
+radarPosition_A = scenario.radarPosition_A;                                 % Radar 좌표계에서 Radar의 위치, 보통은 원점
+pointPositionHomogeneous_D = [scenario.pointPosition_D; ...
+                              ones(1, numberOfPoints)];
+
+for timeIndex = 1:numberOfTimes
+    currentTime = time(timeIndex);                                          % 시나리오 시간 시점, 시나리오 시간 흐름을 나타내는 샘플
+
+    % A_T_B: Reference frame B translates relative to radar frame A.
+    % Its axes remain parallel to A, so A_R_B = I.
+    currentReferenceOrigin_A = ...
+        scenario.referenceOriginFunction(currentTime);                      % 현재 시나리오 시점에서 Radar 좌표계에서 바라본 표적 전체의 기준점 위치
+    currentTransform_A_B = makeTransform(eye(3), ...
+                                         currentReferenceOrigin_A);         % 현재 시나리오 시점에서 Reference 좌표계에서 Radar 좌표계로의 변환 행렬, 회전 행렬은 항상 0
+
+    % B_T_C: Local frame C rotates relative to reference frame B.
+    % B and C share the same origin, so B_o_C = 0.
+    currentRotation_B_C = scenario.localRotationFunction(currentTime);      % 현재 시나리오 시점에서 Local 좌표계에서 Reference 좌표계로의 회전 행렬, 표적 전체의 회전
+    currentTransform_B_C = makeTransform(currentRotation_B_C, zeros(3,1));  % 현재 시나리오 시점에서 Local 좌표계에서 Reference 좌표계로의 변환 행렬, 평행 이동 벡터는 항상 0
+
+    % C_T_D: The component pivot translates and rotates relative to C.
+    currentComponentOrigin_C = ...
+        scenario.componentOriginFunction(currentTime);                      % 현재 시나리오 시점에서 Local 좌표계에서 바라본 표적의 개별 강체 구성 요소의 기준점 위치(Component 좌표계의 중심)
+    currentRotation_C_D = ...
+        scenario.componentRotationFunction(currentTime);                    % 현재 시나리오 시점에서 Component 좌표계에서 Local 좌표계로의 회전 행렬, 표적의 개별 강체 구성요소의 회전
+    currentTransform_C_D = makeTransform(currentRotation_C_D, ...
+                                         currentComponentOrigin_C);         % 현재 시나리오 시점에서 Component 좌표계에서 Local 좌표계로의 변환 행렬
+
+    % Hierarchical transform composition.
+    currentTransform_A_C = currentTransform_A_B * currentTransform_B_C;     % 현재 시나리오 시점에서 Local 좌표계에서 Radar 좌표계로의 변환 행렬
+    currentTransform_A_D = currentTransform_A_C * currentTransform_C_D;     % 현재 시나리오 시점에서 Component 좌표계에서 Radar 좌표계로의 변환 행렬
+
+    currentPointPositionHomogeneous_A = ...
+        currentTransform_A_D * pointPositionHomogeneous_D;                  % 현재 시나리오 시점에서 Radar 좌표계에서 바라본 point scatterers의 Homogeneous 좌표
+    currentPointPosition_A = currentPointPositionHomogeneous_A(1:3,:);      % 현재 시나리오 시점에서 Radar 좌표계에서 바라본 point scatterers의 좌표
+
+    % Exact monostatic spherical range from the radar to each point.
+    currentDisplacement_A = currentPointPosition_A - radarPosition_A;
+    currentPointRange = sqrt(sum(currentDisplacement_A.^2, 1));             % 현재 시나리오 시점에서 Radar와 point scatterers 사이의 Euclidean 거리
+
+    pointPosition_A(:,:,timeIndex) = currentPointPosition_A;                % 시나리오에서 Radar 좌표계에서 바라본 point scatterers의 좌표를 기록
+    pointRange(:,timeIndex) = currentPointRange.';                          % 시나리오에서 Radar와 point scatterers 사이의 Euclidean 거리를 기록
+
+    transform_A_B(:,:,timeIndex) = currentTransform_A_B;
+    transform_A_C(:,:,timeIndex) = currentTransform_A_C;
+    transform_A_D(:,:,timeIndex) = currentTransform_A_D;
+
+    referenceOrigin_A(:,timeIndex) = currentReferenceOrigin_A;
+    componentOrigin_A(:,timeIndex) = currentTransform_A_D(1:3,4);
+end
+
+%% 3. Validate the generalized position equation and rigid-body geometry
+validation = validateModel(scenario, pointPosition_A, pointRange, ...
+                           transform_A_B, transform_A_C, transform_A_D);
+
+%% 4. Store reusable geometry/range results in the workspace
+results.scenario = scenario;
+results.time = time;
+results.transform_A_B = transform_A_B;
+results.transform_A_C = transform_A_C;
+results.transform_A_D = transform_A_D;
+results.referenceOrigin_A = referenceOrigin_A;
+results.componentOrigin_A = componentOrigin_A;
+results.pointPosition_A = pointPosition_A;
+results.pointRange = pointRange;
+results.rangeChange = pointRange - pointRange(:,1);
+results.validation = validation;
+
+%% 5. Print a concise model summary
+fprintf('============================================================\n');
+fprintf('Single rigid component geometry/range model\n');
+fprintf('============================================================\n');
+fprintf('Scenario                         : %s\n', scenario.displayName);
+fprintf('Number of component points       : %d\n', numberOfPoints);
+fprintf('Observation time                 : %.6f s\n', time(end)-time(1));
+fprintf('Geometry sampling rate           : %.3f Hz\n', scenario.samplingRate);
+fprintf('Minimum exact point range        : %.9f m\n', min(pointRange(:)));
+fprintf('Maximum exact point range        : %.9f m\n', max(pointRange(:)));
+fprintf('Maximum absolute range change    : %.9f m\n', ...
+        max(abs(results.rangeChange(:))));
+fprintf('Maximum rigid-distance error     : %.3e m\n', ...
+        validation.maximumRigidDistanceError);
+fprintf('Maximum expanded-equation error  : %.3e m\n', ...
+        validation.maximumExpandedEquationError);
+fprintf('Maximum rotation-matrix error    : %.3e\n', ...
+        validation.maximumRotationMatrixError);
+
+%% 6. Visualize the 3-D geometry and exact range histories
+plotGeometry(scenario, results);
+plotRanges(scenario, results);
+
+if animation.enabled
+    animateGeometry(scenario, results, animation);
+end
+
+%% Local functions
+function scenario = createScenario(scenarioName)
+    scenarioName = lower(string(scenarioName));
+
+    switch scenarioName
+        case "breathing"
+            scenario = createBreathingScenario();
+
+        case "two_blade_rotor"
+            scenario = createTwoBladeRotorScenario();
+
+        otherwise
+            error(['Unknown scenario "%s". Use "breathing" or ' ...
+                   '"two_blade_rotor".'], scenarioName);
+    end
+end
+
+function scenario = createBreathingScenario()
+    % A small chest patch is approximated as one translating rigid body.
+    scenario.displayName = 'Rigid chest-patch respiration';
+    scenario.radarPosition_A = [0; 0; 0];                                       % Radar 좌표계에서 Radar의 위치, 보통은 Radar 좌표계의 원점
+
+    scenario.samplingRate = 50;                                                 % 시나리오의 프레임 속도
+    observationTime = 12;                                                       % 시나리오 전체 시간 길이
+    scenario.time = 0:1/scenario.samplingRate:observationTime;                  % 시나리오 시간 도메인
+
+    initialReferenceOrigin_A = [0.5; 0.0; 0.0];                                 % 시나리오 초기에 Radar 좌표계에서 바라본 표적 전체의 기준점 위치
+    scenario.referenceOriginFunction = ...
+        @(t) initialReferenceOrigin_A + zeros(3,1)*t;                           % 시나리오 시간 흐름에 따른 표적 전체의 기준점 위치 이동, 표적 전체의 속도를 통해 모델링, 호흡 모델에서는 정지한 표적
+
+    % Z-Y-X yaw-pitch-roll convention. This is the full orientation of C.
+    initialRotation_B_C = rotationZYX(deg2rad(0), ...
+                                      deg2rad(0), ...
+                                      deg2rad(0));                              % 시나리오 초기에 Local 좌표계에서 Reference 좌표계로의 회전 행렬, 초기 표적 전체의 자세, 항공우주 분야에서 주로 사용하는 yaw-pitch-roll 관습
+    scenario.localRotationFunction = @(t) initialRotation_B_C;                  % 시나리오 시간 흐름에 따른 표적 전체의 회전 행렬, 호흡 모델에서는 정적인 표적, Local 좌표계에서 Reference 좌표계로의 회전 행렬
+
+    equilibriumComponentOrigin_C = [0; 0; 0];                             % 시나리오 초기에 표적의 개별 강체 구성요소의 기준점 위치
+    breathingDirection_C = [1; 0; 0];                                           
+    breathingDirection_C = breathingDirection_C / norm(breathingDirection_C);   % 호흡 운동의 방향
+    breathingAmplitude = 5e-3;                                                  % 호흡 운동의 amplitude
+    breathingFrequency = 0.25;                                                  % 호흡 운동의 frequency, micromotion rate
+    breathingInitialPhase = 0;                                                  % 호흡 운동의 초기 위상, 초기 위치를 결정
+
+    scenario.componentOriginFunction = @(t) ...
+        equilibriumComponentOrigin_C + ...
+        breathingAmplitude * ...
+        sin(2*pi*breathingFrequency*t + breathingInitialPhase) * ...
+        breathingDirection_C;                                                   % 시나리오 시간 흐름에 따른 호흡 운동에 의한 표적의 개별 강체 구성요소의 기준점 움직임, Component 좌표계에서 Local 좌표계로의 평행 이동 벡터
+
+    scenario.componentRotationFunction = @(t) eye(3);                           % 시나리오 시간 흐름에 따른 표적의 개별 강체 구성요소의 회전, Component 좌표계에서 Local 좌표계로의 회전 행렬, 호흡 모델에서는 정적인 강체 구성 요소
+
+    % Nine points form a rigid rectangular chest patch in the D yz-plane.
+    [pointY, pointZ] = meshgrid(linspace(-0.15, 0.15, 3), ...
+                                linspace(-0.18, 0.18, 3));                      % 호흡 운동을 하는 평면을 30 cm x 36 cm로 구성
+    scenario.pointPosition_D = [zeros(1, numel(pointY)); ...
+                                pointY(:).'; ...
+                                pointZ(:).'];                                   % 시나리오에서 표적의 개별 강체 구성요소를 구성하는 point scatterers 위치, Component 좌표계에서의 point scatterers 위치
+
+    scenario.trajectoryPointIndices = [1, 3, 7, 9];
+    scenario.frameAxisLength = 0.35;
+    scenario.rangeChangeScale = 1e3;
+    scenario.rangeChangeUnit = 'mm';
+
+    scenario.parameters.motionType = 'component translation';
+    scenario.parameters.amplitude = breathingAmplitude;
+    scenario.parameters.frequency = breathingFrequency;
+end
+
+function scenario = createTwoBladeRotorScenario()
+    % The hub and both blades are one rigid rotating component.
+    scenario.displayName = 'Rigid two-blade rotor';
+    scenario.radarPosition_A = [0; 0; 0];                                       % 시나리오에서 Radar 위치, Radar 좌표계에서 Radar 위치, 보통은 Radar 좌표계의 원점
+
+    scenario.samplingRate = 500;                                                % 시나리오의 프레임 속도
+    observationTime = 1;                                                        % 시나리오의 전체 시간 길이
+    scenario.time = 0:1/scenario.samplingRate:observationTime;                  % 시나리오의 시간 도메인
+
+    initialReferenceOrigin_A = [8.0; 0.0; 0.0];                                 % 시나리오 초기에 표적 전체의 기준점 위치, Radar 좌표계에서 바라본 Reference 좌표계 중심의 위치
+    scenario.referenceOriginFunction = ...
+        @(t) initialReferenceOrigin_A + zeros(3,1)*t;                           % 시나리오 시간 흐름에 따른 표적 전체의 기준점 움직임, 위치 변화, 표적 전체의 속도로 모델링, Reference 좌표계에서 Radar 좌표계로의 평행 이동 벡터
+
+    % The target attitude tilts the rotor plane relative to radar LOS.
+    initialRotation_B_C = rotationZYX(deg2rad(0), ...
+                                      deg2rad(0), ...
+                                      deg2rad(0));                             % 시나리오 초기에 표적 전체의 자세, 초기 자세를 결정, Local 좌표계에서 Reference 좌표계로의 초기 회전 행렬, yaw-pitch-roll 관습
+    scenario.localRotationFunction = @(t) initialRotation_B_C;                  % 시나리오 시간 흐름에 따른 표적 전체의 자세 움직임, 자세의 움직임과 회전을 결정, Local 좌표계에서 Reference 좌표계로의 회전 행렬
+
+    componentOrigin_C = [0.0; 0.0; 0.0];                                        % 시나리오 초기에 표적의 개별 강체 구성 요소의 기준점 위치, Local 좌표계에서 바라본 Component 좌표계 중심의 위치
+    scenario.componentOriginFunction = @(t) componentOrigin_C;                  % 시나리오 시간 흐름에 따른 표적의 개별 강체 구성 요소의 기준점 움직임, micromotion의 움직임 결정, Component 좌표계에서 Local 좌표계로의 평행 이동 벡터
+
+    rotationRate = 10;                                                           % 블레이드의 회전 속도, revolutions per second
+    angularRate = 2*pi*rotationRate;                                            % 블레이드의 각속도 radians per second
+    initialRotorPhase = deg2rad(10);                                            % 블레이드의 초기 위치, 각 블레이드의 초기 위상을 결정
+    scenario.componentRotationFunction = @(t) ...
+        rotationAboutAxis([0;0;1], angularRate*t + initialRotorPhase);          % 시나리오 시간 흐름에 따른 표적의 개별 강체 구성 요소의 회전, 블레이드 회전과 같은 micromotion의 회전 결정, Component 좌표계에서 Local 좌표계로의 회전 행렬
+
+    % The component origin is the hub. Both blades lie on the D x-axis.
+    bladeRadii = linspace(0.008, 0.15, 10);                                       % 하나의 블레이드 강체 구성 요소를 구성하는 point scatterers의 반지름
+    positiveBladePoints = [ bladeRadii; ...
+                            zeros(size(bladeRadii)); ...
+                            zeros(size(bladeRadii))];
+    negativeBladePoints = [-bladeRadii; ...
+                            zeros(size(bladeRadii)); ...
+                            zeros(size(bladeRadii))];
+
+    scenario.pointPosition_D = [zeros(3,1), ...
+                                positiveBladePoints, ...
+                                negativeBladePoints];                           % 전체 블레이드 강체 구성 요소를 구성하는 point scatterers의 위치, Component 좌표계의 x축에 point scatterers가 위치, rotor를 나타내는 point scatterer 포함
+
+    positiveTipIndex = 1 + numel(bladeRadii);
+    negativeTipIndex = 1 + 2*numel(bladeRadii);
+    scenario.trajectoryPointIndices = [positiveTipIndex, negativeTipIndex];
+    scenario.frameAxisLength = 0.40;
+    scenario.rangeChangeScale = 1e3;
+    scenario.rangeChangeUnit = 'mm';
+
+    scenario.parameters.motionType = 'component rotation';
+    scenario.parameters.rotationRate = rotationRate;
+    scenario.parameters.bladeLength = max(bladeRadii);
+end
+
+function transform = makeTransform(rotation, translation)
+    transform = [rotation, translation(:); 0, 0, 0, 1];
+end
+
+function rotation = rotationZYX(yaw, pitch, roll)
+    % Active column-vector rotation: Rz(yaw)*Ry(pitch)*Rx(roll).
+    rotation = rotationZ(yaw) * rotationY(pitch) * rotationX(roll);
+end
+
+function rotation = rotationAboutAxis(axis, angle)
+    axis = axis(:) / norm(axis);
+    axisSkew = [       0, -axis(3),  axis(2); ...
+                 axis(3),        0, -axis(1); ...
+                -axis(2),  axis(1),       0];
+
+    rotation = eye(3) + ...
+               sin(angle)*axisSkew + ...
+               (1-cos(angle))*(axisSkew*axisSkew);
+end
+
+function rotation = rotationX(angle)
+    rotation = [1,          0,           0; ...
+                0, cos(angle), -sin(angle); ...
+                0, sin(angle),  cos(angle)];
+end
+
+function rotation = rotationY(angle)
+    rotation = [ cos(angle), 0, sin(angle); ...
+                          0, 1,          0; ...
+                -sin(angle), 0, cos(angle)];
+end
+
+function rotation = rotationZ(angle)
+    rotation = [cos(angle), -sin(angle), 0; ...
+                sin(angle),  cos(angle), 0; ...
+                         0,           0, 1];
+end
+
+function validation = validateModel(scenario, pointPosition_A, pointRange, ...
+                                    transform_A_B, transform_A_C, transform_A_D)
+    numberOfTimes = size(pointPosition_A, 3);
+    pointPosition_D = scenario.pointPosition_D;
+
+    initialDistanceMatrix = pairwiseDistances(pointPosition_A(:,:,1));
+    maximumRigidDistanceError = 0;
+    maximumExpandedEquationError = 0;
+    maximumRotationMatrixError = 0;
+    maximumDeterminantError = 0;
+
+    for timeIndex = 1:numberOfTimes
+        currentTime = scenario.time(timeIndex);
+        currentPointPosition_A = pointPosition_A(:,:,timeIndex);
+
+        currentDistanceMatrix = pairwiseDistances(currentPointPosition_A);
+        maximumRigidDistanceError = max(maximumRigidDistanceError, ...
+            max(abs(currentDistanceMatrix(:) - initialDistanceMatrix(:))));
+
+        % Independently evaluate the expanded generalized equation:
+        % A_p = A_o_B + A_R_B*B_R_C*(C_o_D + C_R_D*D_p).
+        currentReferenceOrigin_A = ...
+            scenario.referenceOriginFunction(currentTime);
+        currentRotation_A_B = eye(3);
+        currentRotation_B_C = ...
+            scenario.localRotationFunction(currentTime);
+        currentComponentOrigin_C = ...
+            scenario.componentOriginFunction(currentTime);
+        currentRotation_C_D = ...
+            scenario.componentRotationFunction(currentTime);
+
+        expandedPointPosition_A = currentReferenceOrigin_A + ...
+            currentRotation_A_B * currentRotation_B_C * ...
+            (currentComponentOrigin_C + ...
+             currentRotation_C_D * pointPosition_D);
+
+        currentExpandedError = ...
+            max(abs(expandedPointPosition_A(:) - currentPointPosition_A(:)));
+        maximumExpandedEquationError = max(maximumExpandedEquationError, ...
+                                           currentExpandedError);
+
+        rotations = {transform_A_B(1:3,1:3,timeIndex), ...
+                     transform_A_C(1:3,1:3,timeIndex), ...
+                     transform_A_D(1:3,1:3,timeIndex)};
+
+        for rotationIndex = 1:numel(rotations)
+            currentRotation = rotations{rotationIndex};
+            currentRotationError = norm(currentRotation.'*currentRotation - eye(3), ...
+                                        'fro');
+            currentDeterminantError = abs(det(currentRotation) - 1);
+
+            maximumRotationMatrixError = max(maximumRotationMatrixError, ...
+                                              currentRotationError);
+            maximumDeterminantError = max(maximumDeterminantError, ...
+                                          currentDeterminantError);
+        end
+    end
+
+    assert(all(isfinite(pointRange(:))) && all(pointRange(:) >= 0), ...
+           'All exact ranges must be finite and nonnegative.');
+    assert(maximumRigidDistanceError < 1e-10, ...
+           'The component did not preserve rigid point-to-point distances.');
+    assert(maximumExpandedEquationError < 1e-12, ...
+           'Homogeneous and expanded position equations do not agree.');
+    assert(maximumRotationMatrixError < 1e-10, ...
+           'At least one rotation matrix is not orthonormal.');
+    assert(maximumDeterminantError < 1e-10, ...
+           'At least one rotation matrix does not have determinant +1.');
+
+    validation.maximumRigidDistanceError = maximumRigidDistanceError;
+    validation.maximumExpandedEquationError = maximumExpandedEquationError;
+    validation.maximumRotationMatrixError = maximumRotationMatrixError;
+    validation.maximumDeterminantError = maximumDeterminantError;
+end
+
+function distanceMatrix = pairwiseDistances(pointPosition)
+    numberOfPoints = size(pointPosition, 2);
+    distanceMatrix = zeros(numberOfPoints, numberOfPoints);
+
+    for firstIndex = 1:numberOfPoints
+        displacement = pointPosition - pointPosition(:,firstIndex);
+        distanceMatrix(firstIndex,:) = sqrt(sum(displacement.^2, 1));
+    end
+end
+
+function plotGeometry(scenario, results)
+    initialIndex = 1;
+    finalIndex = numel(results.time);
+
+    initialTransform_A_B = results.transform_A_B(:,:,initialIndex);
+    initialTransform_A_C = results.transform_A_C(:,:,initialIndex);
+    initialTransform_A_D = results.transform_A_D(:,:,initialIndex);
+
+    initialPointPosition_A = results.pointPosition_A(:,:,initialIndex);
+    finalPointPosition_A = results.pointPosition_A(:,:,finalIndex);
+
+    figure('Name', ['3-D Geometry: ' scenario.displayName], ...
+           'Color', 'w', 'Position', [100 100 1100 760]);
+    axesHandle = axes();
+    hold(axesHandle, 'on');
+    grid(axesHandle, 'on');
+    axis(axesHandle, 'equal');
+
+    radarHandle = plot3(axesHandle, ...
+        scenario.radarPosition_A(1), ...
+        scenario.radarPosition_A(2), ...
+        scenario.radarPosition_A(3), ...
+        'kp', 'MarkerSize', 13, 'MarkerFaceColor', 'k');
+
+    targetHandle = plot3(axesHandle, ...
+        results.referenceOrigin_A(1,initialIndex), ...
+        results.referenceOrigin_A(2,initialIndex), ...
+        results.referenceOrigin_A(3,initialIndex), ...
+        'ro', 'MarkerSize', 9, 'MarkerFaceColor', 'r');
+
+    lineOfSightHandle = plot3(axesHandle, ...
+        [scenario.radarPosition_A(1), results.referenceOrigin_A(1,initialIndex)], ...
+        [scenario.radarPosition_A(2), results.referenceOrigin_A(2,initialIndex)], ...
+        [scenario.radarPosition_A(3), results.referenceOrigin_A(3,initialIndex)], ...
+        'k--', 'LineWidth', 1.1);
+
+    componentHandle = plot3(axesHandle, ...
+        results.componentOrigin_A(1,initialIndex), ...
+        results.componentOrigin_A(2,initialIndex), ...
+        results.componentOrigin_A(3,initialIndex), ...
+        'md', 'MarkerSize', 9, 'MarkerFaceColor', 'm');
+
+    pointHandle = scatter3(axesHandle, ...
+        initialPointPosition_A(1,:), ...
+        initialPointPosition_A(2,:), ...
+        initialPointPosition_A(3,:), ...
+        36, 'b', 'filled');
+
+    scatter3(axesHandle, ...
+        finalPointPosition_A(1,:), ...
+        finalPointPosition_A(2,:), ...
+        finalPointPosition_A(3,:), ...
+        28, 'c', 'o');
+
+    trajectoryHandle = [];
+    for pointIndex = scenario.trajectoryPointIndices
+        currentTrajectory = squeeze(results.pointPosition_A(:,pointIndex,:));
+        currentHandle = plot3(axesHandle, ...
+            currentTrajectory(1,:), ...
+            currentTrajectory(2,:), ...
+            currentTrajectory(3,:), ...
+            'Color', [0.35 0.35 0.35], 'LineWidth', 1.0);
+
+        if isempty(trajectoryHandle)
+            trajectoryHandle = currentHandle;
+        end
+    end
+
+    plotFrame(axesHandle, initialTransform_A_B, scenario.frameAxisLength, ...
+              [0.15 0.45 0.95], 'B');
+    plotFrame(axesHandle, initialTransform_A_C, scenario.frameAxisLength, ...
+              [0.10 0.65 0.25], 'C');
+    plotFrame(axesHandle, initialTransform_A_D, scenario.frameAxisLength, ...
+              [0.80 0.15 0.75], 'D');
+
+    xlabel(axesHandle, 'Radar X_A [m]');
+    ylabel(axesHandle, 'Radar Y_A [m]');
+    zlabel(axesHandle, 'Radar Z_A [m]');
+    title(axesHandle, [scenario.displayName ...
+        ': Radar-Reference-Local-Component geometry']);
+    view(axesHandle, 35, 24);
+
+    legendHandles = [radarHandle, targetHandle, lineOfSightHandle, ...
+                     componentHandle, pointHandle];
+    legendLabels = {'Monostatic radar', 'Reference/local origin', ...
+                    'Radar LOS', 'Component origin/pivot', ...
+                    'Point scatterers at t_0'};
+
+    if ~isempty(trajectoryHandle)
+        legendHandles = [legendHandles, trajectoryHandle];
+        legendLabels{end+1} = 'Selected point trajectories';
+    end
+
+    legend(axesHandle, legendHandles, legendLabels, 'Location', 'best');
+end
+
+function plotFrame(axesHandle, transform_A_X, axisLength, color, frameName)
+    origin = transform_A_X(1:3,4);
+    rotation = transform_A_X(1:3,1:3);
+
+    for axisIndex = 1:3
+        axisVector = axisLength * rotation(:,axisIndex);
+        quiver3(axesHandle, origin(1), origin(2), origin(3), ...
+            axisVector(1), axisVector(2), axisVector(3), 0, ...
+            'Color', color, 'LineWidth', 1.4, 'MaxHeadSize', 0.6, ...
+            'HandleVisibility', 'off');
+
+        labelPosition = origin + 1.08*axisVector;
+        axisNames = 'xyz';
+        text(axesHandle, labelPosition(1), labelPosition(2), labelPosition(3), ...
+            sprintf('%s_%c', frameName, axisNames(axisIndex)), ...
+            'Color', color, 'FontWeight', 'bold');
+    end
+end
+
+function plotRanges(scenario, results)
+    time = results.time;
+    rangeChangeScaled = scenario.rangeChangeScale * results.rangeChange;
+
+    figure('Name', ['Exact Monostatic Ranges: ' scenario.displayName], ...
+           'Color', 'w', 'Position', [150 120 1100 760]);
+    layout = tiledlayout(2,1, 'TileSpacing', 'compact', ...
+                              'Padding', 'compact');
+
+    nexttile;
+    plot(time, results.pointRange.', 'LineWidth', 1.0);
+    grid on;
+    xlabel('Time [s]');
+    ylabel('Exact range [m]');
+    title('Exact spherical range of every component point');
+
+    nexttile;
+    plot(time, rangeChangeScaled.', 'LineWidth', 1.0);
+    grid on;
+    xlabel('Time [s]');
+    ylabel(['Range change [' scenario.rangeChangeUnit ']']);
+    title('Range change relative to t = 0');
+
+    title(layout, [scenario.displayName ...
+        ': geometry-only monostatic range model']);
+end
+
+function animateGeometry(scenario, results, animation)
+    numberOfTimes = numel(results.time);
+    numberOfAnimationFrames = min(animation.maximumFrames, numberOfTimes);
+    animationIndices = unique(round(linspace(1, numberOfTimes, ...
+                                             numberOfAnimationFrames)));
+    numberOfAnimationFrames = numel(animationIndices);
+
+    if numberOfAnimationFrames > 1
+        framePause = animation.playbackDuration / (numberOfAnimationFrames - 1);
+    else
+        framePause = 0;
+    end
+
+    figureHandle = figure('Name', ['Animated 3-D Geometry: ' scenario.displayName], ...
+        'Color', 'w', 'Position', [80 120 1450 680]);
+    layout = tiledlayout(figureHandle, 1, 2, ...
+        'TileSpacing', 'compact', 'Padding', 'compact');
+
+    %% Global radar-target geometry
+    globalAxes = nexttile(layout, 1);
+    hold(globalAxes, 'on');
+    grid(globalAxes, 'on');
+    axis(globalAxes, 'equal');
+    view(globalAxes, 35, 24);
+
+    plot3(globalAxes, ...
+        scenario.radarPosition_A(1), ...
+        scenario.radarPosition_A(2), ...
+        scenario.radarPosition_A(3), ...
+        'kp', 'MarkerSize', 13, 'MarkerFaceColor', 'k', ...
+        'DisplayName', 'Monostatic radar');
+
+    globalLineOfSight = plot3(globalAxes, nan, nan, nan, ...
+        'k--', 'LineWidth', 1.2, 'DisplayName', 'Radar LOS');
+    globalReferenceOrigin = plot3(globalAxes, nan, nan, nan, ...
+        'ro', 'MarkerSize', 9, 'MarkerFaceColor', 'r', ...
+        'DisplayName', 'Reference/local origin');
+    globalComponentOrigin = plot3(globalAxes, nan, nan, nan, ...
+        'md', 'MarkerSize', 9, 'MarkerFaceColor', 'm', ...
+        'DisplayName', 'Component origin');
+    globalPoints = scatter3(globalAxes, nan, nan, nan, 34, 'b', 'filled', ...
+        'DisplayName', 'Current component points');
+
+    xlabel(globalAxes, 'Radar X_A [m]');
+    ylabel(globalAxes, 'Radar Y_A [m]');
+    zlabel(globalAxes, 'Radar Z_A [m]');
+    title(globalAxes, 'Global monostatic radar-target geometry');
+    legend(globalAxes, 'Location', 'best');
+
+    globalLimitData = [scenario.radarPosition_A, ...
+                       results.referenceOrigin_A, ...
+                       results.componentOrigin_A, ...
+                       reshape(results.pointPosition_A, 3, [])];
+    setFixedAxesLimits(globalAxes, globalLimitData, 0.08, 0.15);
+
+    %% Target/component close-up
+    closeAxes = nexttile(layout, 2);
+    hold(closeAxes, 'on');
+    grid(closeAxes, 'on');
+    axis(closeAxes, 'equal');
+    view(closeAxes, 35, 24);
+
+    initialPointPosition_A = results.pointPosition_A(:,:,1);
+    scatter3(closeAxes, ...
+        initialPointPosition_A(1,:), ...
+        initialPointPosition_A(2,:), ...
+        initialPointPosition_A(3,:), ...
+        32, [0.65 0.65 0.65], 'o', ...
+        'DisplayName', 'Initial component points');
+
+    closeReferenceOrigin = plot3(closeAxes, nan, nan, nan, ...
+        'ro', 'MarkerSize', 9, 'MarkerFaceColor', 'r', ...
+        'DisplayName', 'Reference/local origin');
+    closeComponentOrigin = plot3(closeAxes, nan, nan, nan, ...
+        'md', 'MarkerSize', 9, 'MarkerFaceColor', 'm', ...
+        'DisplayName', 'Component origin');
+    closePoints = scatter3(closeAxes, nan, nan, nan, 40, 'b', 'filled', ...
+        'DisplayName', 'Current component points');
+
+    trailHandles = gobjects(1, numel(scenario.trajectoryPointIndices));
+    for trailIndex = 1:numel(trailHandles)
+        trailHandles(trailIndex) = plot3(closeAxes, nan, nan, nan, ...
+            'Color', [0.35 0.35 0.35], 'LineWidth', 1.0, ...
+            'HandleVisibility', 'off');
+    end
+
+    frameB = createAnimatedFrame(closeAxes, results.transform_A_B(:,:,1), ...
+        scenario.frameAxisLength, [0.15 0.45 0.95], 'B');
+    frameC = createAnimatedFrame(closeAxes, results.transform_A_C(:,:,1), ...
+        scenario.frameAxisLength, [0.10 0.65 0.25], 'C');
+    frameD = createAnimatedFrame(closeAxes, results.transform_A_D(:,:,1), ...
+        scenario.frameAxisLength, [0.80 0.15 0.75], 'D');
+
+    % Show the radar direction in the close-up without changing the scale.
+    initialReferenceOrigin_A = results.referenceOrigin_A(:,1);
+    radarDirection_A = scenario.radarPosition_A - initialReferenceOrigin_A;
+    radarDirection_A = radarDirection_A / norm(radarDirection_A);
+    radarDirectionLength = 0.8 * scenario.frameAxisLength;
+    closeRadarDirection = quiver3(closeAxes, ...
+        initialReferenceOrigin_A(1), ...
+        initialReferenceOrigin_A(2), ...
+        initialReferenceOrigin_A(3), ...
+        radarDirectionLength*radarDirection_A(1), ...
+        radarDirectionLength*radarDirection_A(2), ...
+        radarDirectionLength*radarDirection_A(3), 0, ...
+        'Color', 'k', 'LineStyle', '--', 'LineWidth', 1.2, ...
+        'MaxHeadSize', 0.7, 'DisplayName', 'Direction to radar');
+
+    xlabel(closeAxes, 'Radar X_A [m]');
+    ylabel(closeAxes, 'Radar Y_A [m]');
+    zlabel(closeAxes, 'Radar Z_A [m]');
+    title(closeAxes, 'Target/component close-up');
+    legend(closeAxes, 'Location', 'best');
+
+    closeLimitData = [results.referenceOrigin_A, ...
+                      results.componentOrigin_A, ...
+                      reshape(results.pointPosition_A, 3, [])];
+    setFixedAxesLimits(closeAxes, closeLimitData, 0.18, 0.08);
+
+    %% Animation loop
+    for frameIndex = 1:numberOfAnimationFrames
+        timeIndex = animationIndices(frameIndex);
+        currentTime = results.time(timeIndex);
+
+        currentReferenceOrigin_A = results.referenceOrigin_A(:,timeIndex);
+        currentComponentOrigin_A = results.componentOrigin_A(:,timeIndex);
+        currentPointPosition_A = results.pointPosition_A(:,:,timeIndex);
+
+        set(globalLineOfSight, ...
+            'XData', [scenario.radarPosition_A(1), currentReferenceOrigin_A(1)], ...
+            'YData', [scenario.radarPosition_A(2), currentReferenceOrigin_A(2)], ...
+            'ZData', [scenario.radarPosition_A(3), currentReferenceOrigin_A(3)]);
+        set(globalReferenceOrigin, ...
+            'XData', currentReferenceOrigin_A(1), ...
+            'YData', currentReferenceOrigin_A(2), ...
+            'ZData', currentReferenceOrigin_A(3));
+        set(globalComponentOrigin, ...
+            'XData', currentComponentOrigin_A(1), ...
+            'YData', currentComponentOrigin_A(2), ...
+            'ZData', currentComponentOrigin_A(3));
+        set(globalPoints, ...
+            'XData', currentPointPosition_A(1,:), ...
+            'YData', currentPointPosition_A(2,:), ...
+            'ZData', currentPointPosition_A(3,:));
+
+        set(closeReferenceOrigin, ...
+            'XData', currentReferenceOrigin_A(1), ...
+            'YData', currentReferenceOrigin_A(2), ...
+            'ZData', currentReferenceOrigin_A(3));
+        set(closeComponentOrigin, ...
+            'XData', currentComponentOrigin_A(1), ...
+            'YData', currentComponentOrigin_A(2), ...
+            'ZData', currentComponentOrigin_A(3));
+        set(closePoints, ...
+            'XData', currentPointPosition_A(1,:), ...
+            'YData', currentPointPosition_A(2,:), ...
+            'ZData', currentPointPosition_A(3,:));
+
+        if animation.showTrails
+            for trailIndex = 1:numel(trailHandles)
+                pointIndex = scenario.trajectoryPointIndices(trailIndex);
+                currentTrail = squeeze(results.pointPosition_A(:,pointIndex,1:timeIndex));
+                set(trailHandles(trailIndex), ...
+                    'XData', currentTrail(1,:), ...
+                    'YData', currentTrail(2,:), ...
+                    'ZData', currentTrail(3,:));
+            end
+        end
+
+        updateAnimatedFrame(frameB, results.transform_A_B(:,:,timeIndex));
+        updateAnimatedFrame(frameC, results.transform_A_C(:,:,timeIndex));
+        updateAnimatedFrame(frameD, results.transform_A_D(:,:,timeIndex));
+
+        radarDirection_A = scenario.radarPosition_A - currentReferenceOrigin_A;
+        radarDirection_A = radarDirection_A / norm(radarDirection_A);
+        set(closeRadarDirection, ...
+            'XData', currentReferenceOrigin_A(1), ...
+            'YData', currentReferenceOrigin_A(2), ...
+            'ZData', currentReferenceOrigin_A(3), ...
+            'UData', radarDirectionLength*radarDirection_A(1), ...
+            'VData', radarDirectionLength*radarDirection_A(2), ...
+            'WData', radarDirectionLength*radarDirection_A(3));
+
+        title(layout, sprintf('%s   |   t = %.3f s', ...
+            scenario.displayName, currentTime));
+
+        drawnow;
+        if framePause > 0
+            pause(framePause);
+        end
+    end
+end
+
+function frame = createAnimatedFrame(axesHandle, transform_A_X, ...
+                                     axisLength, color, frameName)
+    frame.quiver = gobjects(1,3);
+    frame.label = gobjects(1,3);
+    frame.axisLength = axisLength;
+
+    origin = transform_A_X(1:3,4);
+    rotation = transform_A_X(1:3,1:3);
+    axisNames = 'xyz';
+
+    for axisIndex = 1:3
+        axisVector = axisLength * rotation(:,axisIndex);
+        frame.quiver(axisIndex) = quiver3(axesHandle, ...
+            origin(1), origin(2), origin(3), ...
+            axisVector(1), axisVector(2), axisVector(3), 0, ...
+            'Color', color, 'LineWidth', 1.4, 'MaxHeadSize', 0.6, ...
+            'HandleVisibility', 'off');
+
+        labelPosition = origin + 1.08*axisVector;
+        frame.label(axisIndex) = text(axesHandle, ...
+            labelPosition(1), labelPosition(2), labelPosition(3), ...
+            sprintf('%s_%c', frameName, axisNames(axisIndex)), ...
+            'Color', color, 'FontWeight', 'bold');
+    end
+end
+
+function updateAnimatedFrame(frame, transform_A_X)
+    origin = transform_A_X(1:3,4);
+    rotation = transform_A_X(1:3,1:3);
+
+    for axisIndex = 1:3
+        axisVector = frame.axisLength * rotation(:,axisIndex);
+        set(frame.quiver(axisIndex), ...
+            'XData', origin(1), 'YData', origin(2), 'ZData', origin(3), ...
+            'UData', axisVector(1), ...
+            'VData', axisVector(2), ...
+            'WData', axisVector(3));
+
+        labelPosition = origin + 1.08*axisVector;
+        set(frame.label(axisIndex), 'Position', labelPosition.');
+    end
+end
+
+function setFixedAxesLimits(axesHandle, pointData, paddingFraction, minimumPadding)
+    minimumValues = min(pointData, [], 2);
+    maximumValues = max(pointData, [], 2);
+    maximumSpan = max(maximumValues - minimumValues);
+    padding = max(paddingFraction*maximumSpan, minimumPadding);
+
+    xlim(axesHandle, [minimumValues(1)-padding, maximumValues(1)+padding]);
+    ylim(axesHandle, [minimumValues(2)-padding, maximumValues(2)+padding]);
+    zlim(axesHandle, [minimumValues(3)-padding, maximumValues(3)+padding]);
+end
