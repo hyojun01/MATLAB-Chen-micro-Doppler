@@ -291,7 +291,7 @@ function scenario = createTwoBladeRotorScenario()
     scenario.time = 0:1/scenario.samplingRate:observationTime;
 
     initialReferenceOrigin_A = [10.0; 0.0; 0.0];
-    referenceVelocity_A = [1.0; 1.0; 0];
+    referenceVelocity_A = [0.0; 0.0; 0];
     scenario.referenceOriginFunction = ...
         @(t) initialReferenceOrigin_A + referenceVelocity_A*t;
     scenario.localRotationFunction = @(t) eye(3);
