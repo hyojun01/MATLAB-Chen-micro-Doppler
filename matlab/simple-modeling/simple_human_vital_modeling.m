@@ -3,9 +3,9 @@ function app = simple_human_vital_modeling(mode)
 %
 %   SIMPLE_HUMAN_VITAL_MODELING opens a programmatic MATLAB App that
 %   compares exact Euclidean and Chen far-field ranges for one point
-%   scatterer on a translating rigid chest component. Respiration and
-%   heartbeat parameters and the simulation duration can be changed from
-%   the control panel.
+%   scatterer on a translating rigid chest component. The initial position
+%   vector, respiration and heartbeat parameters, and simulation duration
+%   can be changed from the control panel.
 %
 %   APP = SIMPLE_HUMAN_VITAL_MODELING returns the App handles and the most
 %   recently calculated results.
@@ -16,19 +16,21 @@ function app = simple_human_vital_modeling(mode)
 % Coordinate-frame hierarchy
 % --------------------------
 %   A: radar coordinates, with the monostatic radar at the origin
-%   B: reference coordinates, parallel to A and centered at [R0;0;0]
-%   C: target-local coordinates, with the same origin as B
-%   D: rigid chest-component coordinates, translating relative to C
+%   B: reference coordinates, parallel to A and centered at r0
+%   C: target-local coordinates, coincident and parallel with B
+%   D: rigid chest-component coordinates, parallel to and translating
+%      relative to C
 %
 % The single point scatterer is fixed at the origin of D. Its position is
 %
 %   A_p(t) = A_T_B * B_T_C * C_T_D(t) * D_p.
 %
-% The vital translation is fixed along local +X_C = [1;0;0]. The fixed
-% B-to-C rotation makes that local direction 45 degrees from the radar LOS,
-% intentionally exposing the transverse-range term neglected by the
-% far-field approximation. The Verification tab also sweeps this angle
-% from 0 to 90 degrees.
+% The person does not rotate, so the B, C, and D axes remain parallel. The
+% vital translation is fixed along local +X_C = [1;0;0]. The user-supplied
+% initial position vector r0 determines the radar LOS and therefore the
+% angle between the LOS and the vital-motion direction. The Verification
+% tab sweeps this derived angle from 0 to 90 degrees by changing the initial
+% position direction while keeping all coordinate frames parallel.
 
     if nargin < 1
         mode = "app";
@@ -38,6 +40,35 @@ function app = simple_human_vital_modeling(mode)
 
     if strcmpi(string(mode), "selftest")
         results = simulateVitalModel(defaultParameters);
+
+        % Keep the default unrotated, on-axis case, but add an independent
+        % off-axis geometry so the far-field approximation is exercised.
+        offAxisParameters = defaultParameters;
+        defaultRange = norm(defaultParameters.initialPosition);
+        offAxisParameters.initialPosition = defaultRange * ...
+            [cosd(45); sind(45); 0];
+        offAxisResults = simulateVitalModel(offAxisParameters);
+        offAxisAngleError = abs( ...
+            offAxisResults.geometry.vitalToLosAngleDeg - 45);
+        offAxisCasePassed = offAxisResults.validation.allPassed && ...
+            offAxisAngleError < 1e-12 && ...
+            offAxisResults.metrics.maximumRangeError > ...
+                100*eps(defaultRange);
+
+        results.selfTest.offAxisParameters = offAxisParameters;
+        results.selfTest.offAxisAngleDeg = ...
+            offAxisResults.geometry.vitalToLosAngleDeg;
+        results.selfTest.offAxisMetrics = offAxisResults.metrics;
+        results.selfTest.offAxisValidation = offAxisResults.validation;
+        results.validation.offAxisAngleErrorDeg = offAxisAngleError;
+        results.validation.offAxisMaximumRangeError = ...
+            offAxisResults.metrics.maximumRangeError;
+        results.validation.offAxisCasePassed = offAxisCasePassed;
+        results.validation.allPassed = ...
+            results.validation.allPassed && offAxisCasePassed;
+        assert(results.validation.allPassed, ...
+            'The default or off-axis self-test case failed.');
+
         printSelfTestSummary(results);
         app = struct('Parameters', defaultParameters, ...
                      'Results', results, ...
@@ -77,9 +108,11 @@ function app = simple_human_vital_modeling(mode)
     parameterGrid.RowHeight = repmat({'fit'}, 1, 12);
     parameterGrid.Padding = [8, 8, 8, 8];
 
-    app.InitialRangeField = addNumericControl(parameterGrid, 1, ...
-        'Initial reference range R0 [m]', ...
-        defaultParameters.initialRange, [0.1, 100]);
+    [app.InitialPositionXField, app.InitialPositionYField, ...
+        app.InitialPositionZField] = addVector3NumericControl( ...
+        parameterGrid, 1, 'Initial position [x, y, z] [m]', ...
+        defaultParameters.initialPosition, ...
+        [0, 100; -100, 100; -100, 100]);
 
     app.SimulationTimeField = addNumericControl(parameterGrid, 2, ...
         'Simulation time [s]', ...
@@ -158,9 +191,9 @@ function app = simple_human_vital_modeling(mode)
         'Value', { ...
             sprintf('fc = %.1f GHz, monostatic, phase = +4*pi*DeltaR/lambda', ...
                     defaultParameters.centerFrequency/1e9), ...
-            sprintf('u_C = [1 0 0]^T, vital/LOS angle = %.1f deg, fs = %.0f Hz', ...
-                    defaultParameters.vitalToLosAngleDeg, ...
+            sprintf('B, C, D axes parallel; u_C = [1 0 0]^T; fs = %.0f Hz', ...
                     defaultParameters.samplingRate), ...
+            'Vital/LOS angle is derived from the initial position vector', ...
             'Unit reflectivity; propagation-amplitude loss is excluded'});
     fixedSettingsText.Layout.Row = 2;
     fixedSettingsText.Layout.Column = [1, 2];
@@ -268,7 +301,9 @@ function app = simple_human_vital_modeling(mode)
     end
 
     function resetApp(~, ~)
-        app.InitialRangeField.Value = defaultParameters.initialRange;
+        app.InitialPositionXField.Value = defaultParameters.initialPosition(1);
+        app.InitialPositionYField.Value = defaultParameters.initialPosition(2);
+        app.InitialPositionZField.Value = defaultParameters.initialPosition(3);
         app.SimulationTimeField.Value = defaultParameters.simulationTime;
         app.RespirationAmplitudeField.Value = ...
             1e3*defaultParameters.respirationAmplitude;
@@ -287,7 +322,10 @@ function app = simple_human_vital_modeling(mode)
 
     function parameters = readParametersFromControls()
         parameters = defaultParameters;
-        parameters.initialRange = app.InitialRangeField.Value;
+        parameters.initialPosition = [ ...
+            app.InitialPositionXField.Value; ...
+            app.InitialPositionYField.Value; ...
+            app.InitialPositionZField.Value];
         parameters.simulationTime = app.SimulationTimeField.Value;
         parameters.respirationAmplitude = ...
             1e-3*app.RespirationAmplitudeField.Value;
@@ -305,6 +343,13 @@ function app = simple_human_vital_modeling(mode)
 
     function updateMetricTable(results)
         metricData = { ...
+            'Initial position r0', ...
+                sprintf('[%.4g, %.4g, %.4g] m', ...
+                    results.parameters.initialPosition); ...
+            'Initial range R0', ...
+                sprintf('%.6g m', results.geometry.referenceRange); ...
+            'Derived vital/LOS angle', ...
+                sprintf('%.6g deg', results.geometry.vitalToLosAngleDeg); ...
             'Max |range error|', ...
                 sprintf('%.6g um', 1e6*results.metrics.maximumRangeError); ...
             'Simulation time', ...
@@ -479,7 +524,7 @@ function app = simple_human_vital_modeling(mode)
             results.sweeps.distance.range, ...
             1e6*results.sweeps.distance.maximumSecondOrderError, ...
             '--', 'LineWidth', 1.2, 'DisplayName', 'Second order');
-        xline(app.DistanceSweepAxes, results.parameters.initialRange, ':k', ...
+        xline(app.DistanceSweepAxes, results.geometry.referenceRange, ':k', ...
             'Current R0', 'LabelVerticalAlignment', 'bottom');
         hold(app.DistanceSweepAxes, 'off');
         grid(app.DistanceSweepAxes, 'on');
@@ -499,7 +544,7 @@ function app = simple_human_vital_modeling(mode)
             1e6*results.sweeps.angle.maximumSecondOrderError, ...
             '--', 'LineWidth', 1.2, 'DisplayName', 'Second order');
         xline(app.AngleSweepAxes, ...
-            results.parameters.vitalToLosAngleDeg, ':k', 'Current angle', ...
+            results.geometry.vitalToLosAngleDeg, ':k', 'Current angle', ...
             'LabelVerticalAlignment', 'bottom');
         hold(app.AngleSweepAxes, 'off');
         grid(app.AngleSweepAxes, 'on');
@@ -702,7 +747,7 @@ function app = simple_human_vital_modeling(mode)
         referenceOrigin = results.geometry.referenceOrigin_A;
         pointPosition = results.geometry.pointPosition_A(:, pointIndex);
         motionDirection = results.geometry.vitalDirection_A;
-        directionLength = max(0.15*results.parameters.initialRange, 0.05);
+        directionLength = max(0.15*results.geometry.referenceRange, 0.05);
 
         plot3(axesHandle, ...
             [radarPosition(1), referenceOrigin(1)], ...
@@ -739,7 +784,7 @@ function app = simple_human_vital_modeling(mode)
         ylabel(axesHandle, 'Y_A [m]');
         zlabel(axesHandle, 'Z_A [m]');
         title(axesHandle, sprintf('A-B-C-D geometry (motion angle %.1f deg)', ...
-            results.parameters.vitalToLosAngleDeg));
+            results.geometry.vitalToLosAngleDeg));
         legend(axesHandle, 'Location', 'best');
     end
 end
@@ -757,6 +802,33 @@ function field = addNumericControl(parent, row, labelText, value, limits)
         'UpperLimitInclusive', 'on');
     field.Layout.Row = row;
     field.Layout.Column = 2;
+end
+
+function [fieldX, fieldY, fieldZ] = addVector3NumericControl( ...
+        parent, row, labelText, value, limits)
+    label = uilabel(parent, 'Text', labelText);
+    label.Layout.Row = row;
+    label.Layout.Column = 1;
+
+    vectorGrid = uigridlayout(parent, [1, 3]);
+    vectorGrid.Layout.Row = row;
+    vectorGrid.Layout.Column = 2;
+    vectorGrid.ColumnWidth = {'1x', '1x', '1x'};
+    vectorGrid.RowHeight = {'fit'};
+    vectorGrid.Padding = [0, 0, 0, 0];
+    vectorGrid.ColumnSpacing = 4;
+
+    fieldX = uieditfield(vectorGrid, 'numeric', ...
+        'Value', value(1), 'Limits', limits(1,:));
+    fieldX.Tooltip = 'X_A coordinate';
+
+    fieldY = uieditfield(vectorGrid, 'numeric', ...
+        'Value', value(2), 'Limits', limits(2,:));
+    fieldY.Tooltip = 'Y_A coordinate';
+
+    fieldZ = uieditfield(vectorGrid, 'numeric', ...
+        'Value', value(3), 'Limits', limits(3,:));
+    fieldZ.Tooltip = 'Z_A coordinate';
 end
 
 function addSectionLabel(parent, row, labelText)
@@ -796,7 +868,7 @@ end
 
 %% Model and validation
 function parameters = makeDefaultParameters()
-    parameters.initialRange = 2.0;
+    parameters.initialPosition = [2.0; 0; 0];
     parameters.simulationTime = 20;
     parameters.respirationAmplitude = 5e-3;
     parameters.respirationFrequency = 0.25;
@@ -808,7 +880,6 @@ function parameters = makeDefaultParameters()
     parameters.speedOfLight = 299792458;
     parameters.centerFrequency = 24e9;
     parameters.samplingRate = 200;
-    parameters.vitalToLosAngleDeg = 0;
 end
 
 function results = simulateVitalModel(parameters)
@@ -841,21 +912,23 @@ function results = simulateVitalModel(parameters)
 
     % A: radar, B: reference, C: local, D: chest component.
     radarPosition_A = [0; 0; 0];
-    referenceOrigin_A = [parameters.initialRange; 0; 0];
+    referenceOrigin_A = parameters.initialPosition(:);
     transform_A_B = makeTransform(eye(3), referenceOrigin_A);
 
-    rotation_B_C = rotationZ(deg2rad(parameters.vitalToLosAngleDeg));
+    rotation_B_C = eye(3);
     transform_B_C = makeTransform(rotation_B_C, zeros(3,1));
 
     vitalDirection_C = [1; 0; 0];
-    vitalDirection_A = rotation_B_C*vitalDirection_C;
+    vitalDirection_A = vitalDirection_C;
     pointPosition_D = [0; 0; 0];
     pointPositionHomogeneous_D = [pointPosition_D; 1];
 
     referenceVector_A = referenceOrigin_A - radarPosition_A;
     referenceRange = norm(referenceVector_A);
     lineOfSight_A = referenceVector_A/referenceRange;
-    projectionFactor = dot(lineOfSight_A, vitalDirection_A);
+    projectionFactor = max(-1, min(1, ...
+        dot(lineOfSight_A, vitalDirection_A)));
+    vitalToLosAngleDeg = acosd(projectionFactor);
 
     pointPosition_A = zeros(3, numberOfTimes);
     pointPosition_C = zeros(3, numberOfTimes);
@@ -883,7 +956,7 @@ function results = simulateVitalModel(parameters)
             dot(lineOfSight_A, relativePointPosition_A);
 
         expandedPointPosition_A = referenceOrigin_A + ...
-            rotation_B_C*(componentOrigin_C + pointPosition_D);
+            componentOrigin_C + pointPosition_D;
         expandedPositionError(timeIndex) = ...
             norm(expandedPointPosition_A-currentPointPosition_A);
     end
@@ -955,8 +1028,9 @@ function results = simulateVitalModel(parameters)
     angleSweep = calculateAngleSweep(parameters, totalDisplacement);
 
     validation.maximumTransformError = max(expandedPositionError);
-    recoveredPointPosition_C = rotation_B_C.' * ...
-        (pointPosition_A-referenceOrigin_A);
+    validation.maximumFrameRotationError = max(abs( ...
+        transform_A_D(1:3,1:3,:)-eye(3)), [], 'all');
+    recoveredPointPosition_C = pointPosition_A-referenceOrigin_A;
     expectedPointPosition_C = vitalDirection_C*totalDisplacement;
     validation.maximumLocalDirectionError = max(vecnorm( ...
         recoveredPointPosition_C-expectedPointPosition_C, 2, 1));
@@ -978,6 +1052,7 @@ function results = simulateVitalModel(parameters)
         calculateParallelMotionError(referenceRange, totalDisplacement);
 
     validation.tolerances.transform = 1e-12;
+    validation.tolerances.frameRotation = 1e-12;
     validation.tolerances.localDirection = 1e-12;
     validation.tolerances.closedForm = 1e-12;
     validation.tolerances.rangeIdentity = 1e-12;
@@ -987,6 +1062,8 @@ function results = simulateVitalModel(parameters)
     validation.tolerances.parallelMotion = 1e-12;
     validation.allPassed = ...
         validation.maximumTransformError < validation.tolerances.transform && ...
+        validation.maximumFrameRotationError < ...
+            validation.tolerances.frameRotation && ...
         validation.maximumLocalDirectionError < ...
             validation.tolerances.localDirection && ...
         validation.maximumClosedFormError < validation.tolerances.closedForm && ...
@@ -1017,7 +1094,9 @@ function results = simulateVitalModel(parameters)
     results.motion.totalVelocity = totalVelocity;
     results.geometry.radarPosition_A = radarPosition_A;
     results.geometry.referenceOrigin_A = referenceOrigin_A;
+    results.geometry.referenceRange = referenceRange;
     results.geometry.lineOfSight_A = lineOfSight_A;
+    results.geometry.vitalToLosAngleDeg = vitalToLosAngleDeg;
     results.geometry.vitalDirection_C = vitalDirection_C;
     results.geometry.vitalDirection_A = vitalDirection_A;
     results.geometry.pointPosition_D = pointPosition_D;
@@ -1092,9 +1171,12 @@ function results = calculateBasebandSpectrogram(exactSignal, ...
 end
 
 function sweep = calculateDistanceSweep(parameters, displacement, projectionFactor)
-    minimumRange = max(0.1, parameters.initialRange/10);
+    referenceRange = norm(parameters.initialPosition);
+    lineOfSight_A = parameters.initialPosition(:)/referenceRange;
+    vitalDirection_A = [1; 0; 0];
+    minimumRange = max(0.1, referenceRange/10);
     maximumRange = min(1000, max(10*minimumRange, ...
-        10*parameters.initialRange));
+        10*referenceRange));
     rangeValues = logspace(log10(minimumRange), log10(maximumRange), 90);
 
     maximumError = zeros(size(rangeValues));
@@ -1103,8 +1185,10 @@ function sweep = calculateDistanceSweep(parameters, displacement, projectionFact
 
     for rangeIndex = 1:numel(rangeValues)
         currentRange = rangeValues(rangeIndex);
-        exactRange = sqrt(currentRange^2 + ...
-            2*currentRange*projectionFactor*displacement + displacement.^2);
+        currentInitialPosition_A = currentRange*lineOfSight_A;
+        currentPointPosition_A = currentInitialPosition_A + ...
+            vitalDirection_A*displacement;
+        exactRange = vecnorm(currentPointPosition_A, 2, 1);
         farFieldRange = currentRange + projectionFactor*displacement;
         currentError = farFieldRange-exactRange;
         secondOrderError = -transverseFractionSquared*displacement.^2 / ...
@@ -1114,6 +1198,7 @@ function sweep = calculateDistanceSweep(parameters, displacement, projectionFact
     end
 
     sweep.range = rangeValues;
+    sweep.initialPositionDirection = lineOfSight_A;
     sweep.maximumError = maximumError;
     sweep.maximumSecondOrderError = maximumSecondOrderError;
 end
@@ -1122,12 +1207,20 @@ function sweep = calculateAngleSweep(parameters, displacement)
     angleDeg = linspace(0, 90, 91);
     maximumError = zeros(size(angleDeg));
     maximumSecondOrderError = zeros(size(angleDeg));
-    referenceRange = parameters.initialRange;
+    referenceRange = norm(parameters.initialPosition);
+    vitalDirection_A = [1; 0; 0];
+    initialPositionValues_A = zeros(3, numel(angleDeg));
 
     for angleIndex = 1:numel(angleDeg)
-        projectionFactor = cosd(angleDeg(angleIndex));
-        exactRange = sqrt(referenceRange^2 + ...
-            2*referenceRange*projectionFactor*displacement + displacement.^2);
+        currentAngleDeg = angleDeg(angleIndex);
+        currentInitialPosition_A = referenceRange * ...
+            [cosd(currentAngleDeg); sind(currentAngleDeg); 0];
+        initialPositionValues_A(:,angleIndex) = currentInitialPosition_A;
+        lineOfSight_A = currentInitialPosition_A/referenceRange;
+        projectionFactor = dot(lineOfSight_A, vitalDirection_A);
+        currentPointPosition_A = currentInitialPosition_A + ...
+            vitalDirection_A*displacement;
+        exactRange = vecnorm(currentPointPosition_A, 2, 1);
         farFieldRange = referenceRange + projectionFactor*displacement;
         currentError = farFieldRange-exactRange;
         secondOrderError = -(1-projectionFactor^2)*displacement.^2 / ...
@@ -1137,6 +1230,7 @@ function sweep = calculateAngleSweep(parameters, displacement)
     end
 
     sweep.angleDeg = angleDeg;
+    sweep.initialPosition_A = initialPositionValues_A;
     sweep.maximumError = maximumError;
     sweep.maximumSecondOrderError = maximumSecondOrderError;
 end
@@ -1149,8 +1243,11 @@ function maximumError = calculateParallelMotionError(referenceRange, displacemen
 end
 
 function validateModelParameters(parameters)
-    validateattributes(parameters.initialRange, {'numeric'}, ...
-        {'scalar', 'real', 'finite', 'positive'});
+    validateattributes(parameters.initialPosition, {'numeric'}, ...
+        {'vector', 'numel', 3, 'real', 'finite'});
+    referenceRange = norm(parameters.initialPosition);
+    assert(referenceRange > 0, ...
+        'The initial position vector must be nonzero.');
     validateattributes(parameters.simulationTime, {'numeric'}, ...
         {'scalar', 'real', 'finite', 'positive'});
     validateattributes(parameters.respirationAmplitude, {'numeric'}, ...
@@ -1164,30 +1261,32 @@ function validateModelParameters(parameters)
 
     maximumDisplacement = parameters.respirationAmplitude + ...
                           parameters.heartbeatAmplitude;
-    assert(maximumDisplacement < parameters.initialRange, ...
-        'The total vital displacement must be smaller than R0.');
+    assert(maximumDisplacement < referenceRange, ...
+        'The total vital displacement must be smaller than norm(r0).');
 end
 
 function transform = makeTransform(rotation, translation)
     transform = [rotation, translation(:); 0, 0, 0, 1];
 end
 
-function rotation = rotationZ(angle)
-    rotation = [cos(angle), -sin(angle), 0; ...
-                sin(angle),  cos(angle), 0; ...
-                0,           0,          1];
-end
-
 function printSelfTestSummary(results)
     fprintf('============================================================\n');
     fprintf('Human vital-sign far-field model self-test\n');
     fprintf('============================================================\n');
+    fprintf('Initial reference position    : [%.6f %.6f %.6f] m\n', ...
+        results.parameters.initialPosition);
     fprintf('Initial reference range       : %.6f m\n', ...
-        results.parameters.initialRange);
+        results.geometry.referenceRange);
     fprintf('Simulation time               : %.6f s\n', ...
         results.parameters.simulationTime);
-    fprintf('Vital-motion/LOS angle        : %.3f deg\n', ...
-        results.parameters.vitalToLosAngleDeg);
+    fprintf('Default vital-motion/LOS angle: %.3f deg\n', ...
+        results.geometry.vitalToLosAngleDeg);
+    fprintf('Off-axis reference position   : [%.6f %.6f %.6f] m\n', ...
+        results.selfTest.offAxisParameters.initialPosition);
+    fprintf('Off-axis vital/LOS angle      : %.3f deg\n', ...
+        results.selfTest.offAxisAngleDeg);
+    fprintf('Off-axis maximum range error  : %.9e m\n', ...
+        results.selfTest.offAxisMetrics.maximumRangeError);
     fprintf('Maximum absolute range error  : %.9e m\n', ...
         results.metrics.maximumRangeError);
     fprintf('RMS range error               : %.9e m\n', ...
@@ -1204,6 +1303,8 @@ function printSelfTestSummary(results)
         results.validation.maximumClosedFormError);
     fprintf('Transform-chain check         : %.3e m\n', ...
         results.validation.maximumTransformError);
+    fprintf('Parallel-frame rotation check : %.3e\n', ...
+        results.validation.maximumFrameRotationError);
     fprintf('Local +X direction check      : %.3e m\n', ...
         results.validation.maximumLocalDirectionError);
     fprintf('Frequency/range-rate check    : %.3e Hz\n', ...
