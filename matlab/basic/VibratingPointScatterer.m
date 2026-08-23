@@ -27,11 +27,13 @@ Av = 0.05;                      % Vibrating displacement
 Phiv = 0;                       % Vibrating inital phase
 Dirv = [1; 0; 0];               % Vibrating direction in Local coordinates
 Dirv = Dirv/norm(Dirv);
-V = [1; 1; 0];                  % Bulk velocity of Target
+R0 = [1; 0; 0];                 % initial position of target
+V = [0; 0; 0];                  % Bulk velocity of Target
+eulerInitDeg = [0; 0; 0];       % initial rotation of target
 eulerRateDeg = [0; 0; 0];       % Bulk rotation of target
 rcs = 0.8;                      % rcs of point scatterer, ideal
 
-runGeometryAnimation = true;    % Enable 3-D geometry animation
+runGeometryAnimation = false;    % Enable 3-D geometry animation
 animationFrameRate = 30;        % Display frame rate [frames/s]
 animationPlaybackSpeed = 1;     % 1: real time, 2: twice as fast
 
@@ -42,17 +44,17 @@ animationPlaybackSpeed = 1;     % 1: real time, 2: twice as fast
 RadarPos = [0; 0; 0];                       
 
 % Translation of target center about radar
-RefRadarTrans = [1+V(1)*t; ...
-                 0+V(2)*t; ...
-                 0+V(3)*t];
+RefRadarTrans = [R0(1)+V(1)*t; ...
+                 R0(2)+V(2)*t; ...
+                 R0(3)+V(3)*t];
 
 % Rotation of target about radar
 yawchange = eulerRateDeg(1)*t;
 pitchchange = eulerRateDeg(2)*t;
 rollchange = eulerRateDeg(3)*t;
-yaw = 0+yawchange;
-pitch = 0+pitchchange;
-roll = 0+rollchange;
+yaw = eulerInitDeg(1)+yawchange;
+pitch = eulerInitDeg(2)+pitchchange;
+roll = eulerInitDeg(3)+rollchange;
 N = numel(t);
 LocRefRot = zeros(3,3,N);
 for k=1:N
